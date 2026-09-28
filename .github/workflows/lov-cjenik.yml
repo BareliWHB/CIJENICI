@@ -1,0 +1,194 @@
+name: Lov.hr dnevni cjenik
+
+on:
+  schedule:
+    # 04:30 UTC = 06:30 ljeti / 05:30 zimi u Hrvatskoj
+    # Cartum XML se osvjezava u 04:00
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate-price-list:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Preuzmi repozitorij
+        uses: actions/checkout@v4
+
+      - name: Postavi Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Izradi aktualni i arhivski cjenik
+        env:
+          XML_URL: "https://lov.hr/content/export/9b8711375d9a8debae07e6a6999bc9ff.xml"
+        run: |
+          python <<'PY'
+          import csv
+          import glob
+          import os
+          import re
+          import urllib.request
+          import xml.etree.ElementTree as ET
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          # -------------------------------------------------
+          # 1. SIDRENE CIJENE
+          # Uzimamo ih iz prvog vec postojeceg Lov.hr CSV-a.
+          # -------------------------------------------------
+
+          source_files = sorted(
+              f for f in glob.glob("webshop_Pasnik-42C_P-01_*.csv")
+              if os.path.isfile(f)
+          )
+
+          if not source_files:
+              raise RuntimeError("Nije pronaden pocetni Lov.hr CSV sa sidrenim cijenama.")
+
+          anchor_file = source_files[0]
+
+          anchors = {}
+
+          with open(anchor_file, "r", encoding="utf-8-sig", newline="") as f:
+              reader = csv.DictReader(f)
+
+              for row in reader:
+                  code = (row.get("Šifra") or "").strip()
+                  anchor = (row.get("Sidrena cijena EUR (10.09.2026.)") or "").strip()
+
+                  if code:
+                      anchors[code] = anchor
+
+          print(f"Ucitan broj sidrenih cijena: {len(anchors)}")
+          print(f"Izvor sidrenih cijena: {anchor_file}")
+
+          # -------------------------------------------------
+          # 2. PREUZIMANJE AKTUALNOG CARTUM XML-a
+          # -------------------------------------------------
+
+          request = urllib.request.Request(
+              os.environ["XML_URL"],
+              headers={"User-Agent": "Lov.hr price-list updater"}
+          )
+
+          with urllib.request.urlopen(request, timeout=60) as response:
+              xml_data = response.read()
+
+          root = ET.fromstring(xml_data)
+
+          # -------------------------------------------------
+          # 3. PRETVARANJE U PROPISANI CSV
+          # -------------------------------------------------
+
+          headers = [
+              "Naziv",
+              "Šifra",
+              "Marka",
+              "Jedinica mjere",
+              "Cijena za jedinicu mjere",
+              "Maloprodajna cijena EUR",
+              "Poseban oblik prodaje",
+              "Naziv posebnog oblika prodaje",
+              "Sidrena cijena EUR (10.09.2026.)",
+              "Barkod",
+              "Dostupnost",
+          ]
+
+          rows = []
+
+          for offer in root.findall(".//offer"):
+              code = (offer.findtext("vendorCode") or "").strip()
+              name = (offer.findtext("name") or "").strip()
+              brand = (offer.findtext("vendor") or "").strip()
+              price = (offer.findtext("price") or "").strip()
+
+              available = (offer.get("available") or "").lower() == "true"
+
+              anchor = anchors.get(code, "")
+
+              rows.append({
+                  "Naziv": name,
+                  "Šifra": code,
+                  "Marka": brand,
+                  "Jedinica mjere": "",
+                  "Cijena za jedinicu mjere": "",
+                  "Maloprodajna cijena EUR": price,
+                  "Poseban oblik prodaje": "NE",
+                  "Naziv posebnog oblika prodaje": "",
+                  "Sidrena cijena EUR (10.09.2026.)": anchor,
+                  "Barkod": "",
+                  "Dostupnost": "dostupno" if available else "nedostupno",
+              })
+
+          if not rows:
+              raise RuntimeError("Cartum XML nije vratio nijedan proizvod.")
+
+          missing_anchor = [
+              row["Šifra"] for row in rows
+              if row["Šifra"] and not row["Sidrena cijena EUR (10.09.2026.)"]
+          ]
+
+          if missing_anchor:
+              print("UPOZORENJE - proizvodi bez sidrene cijene:")
+              print(", ".join(missing_anchor))
+
+          # -------------------------------------------------
+          # 4. NAZIV DNEVNE ARHIVSKE DATOTEKE
+          # -------------------------------------------------
+
+          now = datetime.now(ZoneInfo("Europe/Zagreb"))
+
+          existing_numbers = []
+
+          for filename in glob.glob("webshop_Pasnik-42C_P-01_*.csv"):
+              match = re.search(r"_P-01_(\d{6})_", filename)
+              if match:
+                  existing_numbers.append(int(match.group(1)))
+
+          next_number = max(existing_numbers, default=0) + 1
+
+          archive_name = (
+              f"webshop_Pasnik-42C_P-01_"
+              f"{next_number:06d}_"
+              f"{now:%Y-%m-%d_%H%M}.csv"
+          )
+
+          # -------------------------------------------------
+          # 5. SPREMANJE
+          # LOV_cjenik.csv = stalni aktualni link
+          # datirana datoteka = arhiva
+          # -------------------------------------------------
+
+          def write_csv(filename):
+              with open(filename, "w", encoding="utf-8-sig", newline="") as f:
+                  writer = csv.DictWriter(f, fieldnames=headers)
+                  writer.writeheader()
+                  writer.writerows(rows)
+
+          write_csv("LOV_cjenik.csv")
+          write_csv(archive_name)
+
+          print(f"Broj proizvoda: {len(rows)}")
+          print(f"Aktualni cjenik: LOV_cjenik.csv")
+          print(f"Arhivski cjenik: {archive_name}")
+          PY
+
+      - name: Spremi novi cjenik na GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add LOV_cjenik.csv
+          git add "webshop_Pasnik-42C_P-01_"*.csv
+
+          if git diff --cached --quiet; then
+            echo "Nema promjena za spremanje."
+          else
+            git commit -m "Automatsko dnevno azuriranje Lov.hr cjenika"
+            git push
+          fi
