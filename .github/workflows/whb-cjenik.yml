@@ -1,0 +1,56 @@
+name: WHB dnevni cjenik
+
+on:
+  schedule:
+    # Svaki dan u 04:45 UTC
+    # = 06:45 ljeti / 05:45 zimi u Hrvatskoj
+    - cron: "45 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate-whb-price-list:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Preuzmi repozitorij
+        uses: actions/checkout@v4
+
+      - name: Izradi dnevni WHB cjenik
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -f "WHB_cjenik.csv" ]; then
+            echo "GRESKA: WHB_cjenik.csv ne postoji."
+            exit 1
+          fi
+
+          DATE=$(TZ=Europe/Zagreb date +'%Y-%m-%d')
+          TIME=$(TZ=Europe/Zagreb date +'%H%M')
+
+          mkdir -p WHB_arhiva
+
+          ARCHIVE_FILE="WHB_arhiva/WHB_cjenik_${DATE}_${TIME}.csv"
+
+          cp WHB_cjenik.csv "$ARCHIVE_FILE"
+
+          echo "Aktualni cjenik: WHB_cjenik.csv"
+          echo "Arhivska kopija: $ARCHIVE_FILE"
+
+      - name: Spremi dnevni cjenik na GitHub
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add WHB_cjenik.csv WHB_arhiva/
+
+          if git diff --cached --quiet; then
+            echo "Nema promjena za spremanje."
+          else
+            git commit -m "Automatsko dnevno arhiviranje WHB cjenika"
+            git push
+          fi
