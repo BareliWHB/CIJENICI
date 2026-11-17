@@ -64,6 +64,7 @@ jobs:
                   if code:
                       anchors[code] = anchor
           anchors["STP-002"] = "24.90"
+          anchors["OPR-008"] = "72.00"
           print(f"Ucitan broj sidrenih cijena: {len(anchors)}")
           print(f"Izvor sidrenih cijena: {anchor_file}")
 
