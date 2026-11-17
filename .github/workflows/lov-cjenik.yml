@@ -25,7 +25,7 @@ jobs:
 
       - name: Izradi aktualni i arhivski cjenik
         env:
-          XML_URL: "https://lov.hr/content/export/9b8711375d9a8debae07e6a6999bc9ff.xml"
+          XML_URL: "https://lov.hr/content/export/1f4afce8c781000b1d7ad3cb096edf32.xml?1794904775258"
         run: |
           python <<'PY'
           import csv
@@ -63,7 +63,7 @@ jobs:
 
                   if code:
                       anchors[code] = anchor
-
+          anchors["STP-002"] = "24.90"
           print(f"Ucitan broj sidrenih cijena: {len(anchors)}")
           print(f"Izvor sidrenih cijena: {anchor_file}")
 
